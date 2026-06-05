@@ -1,52 +1,61 @@
-# 📱 Aplicativo de rádio - Multiplataforma e Aúdio simultâneo
+# 📱 Aplicativo Rádio Multiplataforma e Áudio Simultâneo
 
 ![Status](https://img.shields.io/badge/Status-Em_Produ%C3%A7%C3%A3o-success?style=for-the-badge)
 ![Flutter](https://img.shields.io/badge/Flutter-SDK-02569B?style=for-the-badge&logo=flutter&logoColor=white)
 ![Dart](https://img.shields.io/badge/Dart-Language-0175C2?style=for-the-badge&logo=dart&logoColor=white)
 ![Architecture](https://img.shields.io/badge/Architecture-Provider_Pattern-003B57?style=for-the-badge)
 
-> **Aviso:** Este é um repositório vitrine. O código-fonte primário desta aplicação é mantido em ambiente privado corporativo. Este documento descreve as decisões de engenharia, arquitetura de software e integrações nativas aplicadas no desenvolvimento deste player de rádio multiplataforma.
+> **Aviso:** Este é um repositório vitrine. O código-fonte primário desta aplicação é mantido em ambiente privado corporativo. Este documento descreve as decisões de engenharia, a arquitetura de software e os desafios técnicos resolvidos no desenvolvimento deste player de rádio multiplataforma.
 
 ---
 
-## 🎯 Visão Geral da Arquitetura
+## 🎯 O Desafio de Engenharia
 
-O aplicativo **Sistema Atalaia Rádios** foi desenhado para contornar os complexos desafios de streaming contínuo em *background* nos sistemas operacionais Android e iOS. O foco da arquitetura foi garantir o menor consumo de bateria possível, estabilidade de conexão (lidando com perdas de pacote) e o controle rigoroso do estado da aplicação utilizando o **Provider Pattern** (`ChangeNotifierProvider`).
+Aplicações de streaming de áudio contínuo enfrentam desafios rigorosos em dispositivos móveis, principalmente relacionados ao agressivo gerenciamento de bateria e memória (RAM) dos sistemas operacionais (Android e iOS). 
 
-A aplicação agrega múltiplas estações (como Metropolitana, Novabrasil e Atalaia 96) em uma única base de código nativamente compilada.
-
----
-
-## 🧠 Engenharia e Lógica de Negócios (Core Features)
-
-### 1. Resiliência de Streaming e Configuração Dinâmica
-Sistemas de áudio ao vivo são suscetíveis a falhas de servidor. Para mitigar esse risco de negócio:
-*   **Firebase Remote Config:** As URLs de *stream* não são chumbadas (hardcoded) no binário. A aplicação intercepta configurações na nuvem, permitindo que a equipe de engenharia altere a URL do servidor de áudio em tempo real (`_remoteConfig.getString('url_${radio.id}')`), sem necessidade de submeter uma nova versão às lojas (App Store/Google Play).
-*   **Monitoramento de Conectividade:** Uma *Subscription* assíncrona (`connectivity_plus`) escuta ativamente o hardware do dispositivo. Em caso de queda para *offline*, o *Player* suspende imediatamente a renderização e o consumo de dados, estabilizando a *Thread* principal.
-
-### 2. Integração Nativa e Audio Session
-Um dos maiores desafios mobile é o gerenciamento de recursos em *background*:
-*   **Foreground Services & Wake Locks:** Configuração estrita no `AndroidManifest.xml` (`FOREGROUND_SERVICE_MEDIA_PLAYBACK` e `WAKE_LOCK`) acoplada ao `just_audio_background`, garantindo que o Android não destrua a aplicação quando a tela for bloqueada ou a RAM estiver sob pressão.
-*   **Áudio Focus (OS Level):** Integração com o `audio_session` definindo o *profile* `AudioSessionConfiguration.music()`. Isso garante que a aplicação respeite a hierarquia de áudio do SO (ex: pausar a rádio automaticamente se o usuário abrir o Spotify ou receber uma chamada telefônica).
-
-### 3. Telemetria e Analytics em Singleton
-A análise de retenção de ouvintes foi construída com um padrão `Singleton` (`AnalyticsService`) para evitar múltiplas instâncias concorrentes na RAM.
-*   **Rastreio de Sessão (Stopwatch):** Em vez de apenas contar "cliques", o sistema utiliza um *Stopwatch* interno no *Controller*. Quando o usuário dá o *Stop*, o serviço loga eventos estruturados (`radio_listening_session`) enviando a duração exata da sessão em segundos/minutos para o Firebase. O envio só ocorre se a sessão durar mais de 5 segundos, purificando os dados contra cliques acidentais.
-*   **Captura de Erros de Stream:** Falhas de *buffer* disparam logs automáticos de `stream_error` atrelados à estação correspondente, permitindo o monitoramento de estabilidade da rede de forma proativa.
-
-### 4. Sincronização de Hardware e UI/UX
-*   **Controle de Hardware Híbrido:** Integração bidirecional do volume. Se o usuário aperta o botão físico do celular, o UI reflete (`VolumeController`). O último volume utilizado é persistido via `SharedPreferences`, restaurando o estado exato na próxima abertura.
-*   **Metadados (ICY) e API Externa:** A aplicação extrai metadados nativos injetados no fluxo de áudio da rádio (nome da música e artista) de forma assíncrona via `icyMetadataStream`. Imediatamente, realiza um *fetch* na API do iTunes (`https://itunes.apple.com/search`) convertendo a string em uma imagem de alta resolução (Capa do Álbum) `500x500`, que é injetada tanto na UI com filtros de desfoque (`ImageFilter.blur`) quanto na notificação da tela de bloqueio.
+O principal objetivo arquitetural deste projeto foi construir um motor de reprodução resiliente que operasse perfeitamente em *background*, sincronizasse metadados em tempo real e sobrevivesse às interrupções de rede e do sistema operacional, mantendo uma interface fluida e reativa.
 
 ---
 
-## 🛡️ Stack Tecnológica & Pacotes Core
+## 🧠 Arquitetura e Soluções Técnicas
 
-*   **Framework & Linguagem:** Flutter SDK, Dart
-*   **Gerência de Estado:** Provider (`ChangeNotifierProvider`)
-*   **Core de Áudio:** `just_audio`, `just_audio_background`, `audio_session`
-*   **Infraestrutura BaaS:** Firebase Core, Firebase Analytics, Firebase Remote Config
-*   **Interface e Caching:** `cached_network_image`, `google_fonts` (Tipografia Premium Outfit), `shimmer`, `font_awesome_flutter`.
+### 1. Streaming Resiliente e Alta Disponibilidade
+Servidores de rádio ao vivo podem sofrer instabilidades. Para proteger a operação e evitar interrupções prolongadas:
+*   **Configuração Dinâmica em Nuvem:** A aplicação adota o modelo de *Remote Configuration*. Nenhuma URL de streaming é fixa no binário do aplicativo. Se um servidor cair, a equipe de engenharia atualiza a rota de áudio no painel de controle e o aplicativo passa a consumir a nova fonte instantaneamente, eliminando a necessidade de lançar atualizações nas lojas de aplicativos.
+*   **Monitoramento de Conectividade:** A camada de rede monitora ativamente o hardware. Em caso de perda de conexão, o sistema suspende o consumo de dados e o processamento da *Thread* principal, evitando travamentos e o esgotamento da bateria do usuário.
+
+### 2. Gerenciamento de Ciclo de Vida e Background
+Garantir que a música não pare quando a tela é bloqueada exigiu integração profunda com as APIs nativas:
+*   **Isolamento de Processo e Wake Locks:** Integração de serviços de primeiro plano (*Foreground Services*) e permissões de *Wake Lock* no manifesto nativo, impedindo que o coletor de lixo (Garbage Collector) do Sistema Operacional destrua o player quando a aplicação não estiver visível.
+*   **Audio Focus Handling:** Implementação de regras estritas de hierarquia de áudio. O aplicativo detecta quando o usuário atende uma ligação ou abre outra mídia (como um vídeo no YouTube) e gerencia automaticamente o *ducking* (redução de volume) ou a pausa total da rádio, retornando quando o foco é recuperado.
+
+### 3. UX Dinâmica e Sincronização de Metadados
+Para enriquecer a experiência do ouvinte além do áudio puro:
+*   **Processamento Assíncrono de Metadados (ICY):** O motor de áudio extrai silenciosamente os metadados embutidos no *stream* ao vivo (nome da música e artista).
+*   **Integração com APIs Externas:** Imediatamente após capturar o metadado, uma requisição assíncrona é feita à API do iTunes para buscar a capa oficial do álbum em alta resolução. Essa imagem é inserida em cache e aplicada tanto na interface principal (com efeitos de *blur* dinâmicos) quanto na central de controle da tela de bloqueio do celular.
+
+### 4. Telemetria Estruturada e Inteligência de Negócio
+A coleta de dados foi projetada para entregar métricas acionáveis, e não apenas contagem de cliques:
+*   **Análise de Retenção (Stopwatch):** O controlador de estado possui um cronômetro interno. Ao finalizar uma audição, o aplicativo envia a duração exata da sessão para o serviço de *Analytics*. O sistema possui um filtro que ignora sessões muito curtas (inferiores a 5 segundos) para manter os dados de retenção precisos e livres de ruído.
+*   **Rastreio Proativo de Erros:** Quedas de *buffer* ou falhas de codec disparam eventos silenciosos detalhando o motivo do erro e a estação afetada, permitindo a atuação preventiva da engenharia.
 
 ---
-*Para dúvidas técnicas sobre a sincronização da *Audio Session* com o sistema operacional, a captura de metadados ICY no stream, ou a arquitetura do Singleton de Analytics, sinta-se à vontade para entrar em contato.*
+
+## 🏗️ Padrões de Projeto (Design Patterns)
+
+*   **State Management (Provider Pattern):** Toda a lógica de negócio, controle de volume, *sleep timer* e regras de *playback* foram desacopladas da interface de usuário utilizando o padrão `ChangeNotifier`. Isso garante que a UI seja apenas um reflexo do estado atual da aplicação, facilitando testes e manutenção.
+*   **Singleton Pattern:** Aplicado no serviço de *Analytics* para garantir um único ponto de acesso e processamento de telemetria durante todo o ciclo de vida do aplicativo, otimizando o uso de memória.
+
+---
+
+## 🛠️ Stack Tecnológica
+
+*   **Framework:** Flutter SDK
+*   **Linguagem:** Dart
+*   **Gerência de Estado:** Provider
+*   **Integrações Nativas (Audio & SO):** Just Audio, Audio Session
+*   **BaaS (Backend as a Service):** Firebase (Core, Analytics, Remote Config)
+*   **Design & UI:** Google Fonts, Cached Network Image, Shimmer
+
+---
+*Este documento reflete a arquitetura de uma aplicação real em operação. Para discussões técnicas sobre a implementação da gerência de estado, integração nativa ou arquitetura do projeto, o autor está à disposição.*
